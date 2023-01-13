@@ -18,7 +18,6 @@
 #include "sdkconfig.h"
 
 #include "spi_transmitter.h"
-#include "receiver.h"
 
 static const char *TAG = "eth_example";
 
