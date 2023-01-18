@@ -4,6 +4,8 @@
 #include "driver/gptimer.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #define SPI_BUS HSPI_HOST
 #define SPI_BUS_MOSI_IO 4
@@ -21,18 +23,35 @@ static spi_device_handle_t spi_device_handle;
 static gptimer_handle_t gptimer_handle;
 
 static const char* TAG = "spi_transmitter";
+static TaskHandle_t task;
 
 bool IRAM_ATTR timer_cb(gptimer_handle_t timer,
 		const gptimer_alarm_event_data_t *edata, void* arg) {
-	spi_transaction.tx_buffer = buffer;
+	bool woken;
 
-    esp_err_t error = spi_device_queue_trans(spi_device_handle,
-    		&spi_transaction, 0);
+	vTaskNotifyGiveFromISR(task, &woken);
 
-	if(error != ESP_ERR_TIMEOUT)
-		ESP_ERROR_CHECK(error);
+	if(woken)
+		portYIELD_FROM_ISR();
 
 	return false;
+}
+
+void spi_transmitter_main(void* arg) {
+	uint32_t pending;
+
+	while(true) {
+		pending = ulTaskNotifyTake(true, portMAX_DELAY);
+
+		if(pending > 1)
+			ESP_LOGW(TAG, "overrun by %ld", pending - 1);
+
+		ESP_ERROR_CHECK(spi_device_queue_trans(spi_device_handle,
+	    		&spi_transaction, 0));
+
+		ESP_ERROR_CHECK(spi_device_get_trans_result(spi_device_handle,
+				&spi_transaction, portMAX_DELAY));
+	}
 }
 
 void spi_transmitter_init(void)
@@ -84,6 +103,9 @@ void spi_transmitter_init(void)
 
     spi_transaction.length = BUFFER_LENGTH * 8;
     spi_transaction.tx_buffer = buffer;
+
+    xTaskCreate(spi_transmitter_main, "SPI Transmitter", 2048, NULL,
+    		configMAX_PRIORITIES - 2, &task);
 
     // setup and start timer
     const gptimer_config_t timer_config = {
